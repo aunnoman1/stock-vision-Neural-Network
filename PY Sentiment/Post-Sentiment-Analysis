@@ -56,11 +56,11 @@ def analyze_sentiment(text):
         return 'negative'
 
 stocks = [
-    'tesla', 'apple', 'amazon', 'google', 'microsoft', 'facebook', 'nvidia', 'netflix',
-    'twitter', 'shopify', 'ibm', 'oracle', 'intel', 'amd', 'salesforce', 'paypal', 
-    'adobe', 'zoom', 'snap', 'spotify', 'uber', 'lyft', 'airbnb', 'square', 
-    'paypal', 'baidu', 'alibaba', 'tencent', 'microsoft', 'cisco', 'hp', 'dell', 
-    'twitter', 'roku', 'qualcomm', 'baba', 'lg', 't-mobile', 'morgan', 'wells'
+    'nvidia', 'tesla', 'apple', 'meta', 'microsoft', 'amazon', 'amd', 'broadcom', 
+    'palantir', 'microstrategy', 'exxon', 'micron', 'jpmorgan', 'google', 'salesforce', 
+    'lilly', 'vistra', 'home depot', 'netflix', 'unitedhealth', 'bank of america', 
+    'costco', 'super micro', 'chevron', 'visa', 'coinbase', 'intel', 'qualcomm', 
+    'constellation', 'oracle'
 ]
 
 # Fetch Reddit posts for stocks
