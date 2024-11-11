@@ -1,10 +1,15 @@
+# utility.py
 import json
 import requests
 import pandas as pd
 from textblob import TextBlob
 from datetime import datetime
 
+# Function to fetch Reddit posts for a list of stocks in a specific subreddit
 def fetch_reddit_posts(subreddit, stocks, limit_per_stock=15):
+    """
+    Fetches Reddit posts for specified stocks in a subreddit.
+    """
     url = f"https://reddit.com/r/{subreddit}.json"
     headers = {"User-Agent": "Mozilla/5.0"}
     stock_posts = {stock: [] for stock in stocks}
@@ -46,54 +51,69 @@ def fetch_reddit_posts(subreddit, stocks, limit_per_stock=15):
 
     return stock_posts
 
+# Function to perform sentiment analysis on text
 def analyze_sentiment(text):
-    analysis=Textblob(text)
-    if analysis.sentiment.polarity >0:
+    """
+    Analyzes the sentiment of a given text.
+    Returns:
+        str: 'positive', 'neutral', or 'negative' sentiment.
+    """
+    analysis = TextBlob(text)
+    if analysis.sentiment.polarity > 0:
         return 'positive'
     elif analysis.sentiment.polarity == 0:
         return 'neutral'
     else:
         return 'negative'
 
-stocks = [
-    'tesla', 'apple', 'amazon', 'google', 'microsoft', 'facebook', 'nvidia', 'netflix',
-    'twitter', 'shopify', 'ibm', 'oracle', 'intel', 'amd', 'salesforce', 'paypal', 
-    'adobe', 'zoom', 'snap', 'spotify', 'uber', 'lyft', 'airbnb', 'square', 
-    'paypal', 'baidu', 'alibaba', 'tencent', 'microsoft', 'cisco', 'hp', 'dell', 
-    'twitter', 'roku', 'qualcomm', 'baba', 'lg', 't-mobile', 'morgan', 'wells'
-]
+# Main function to aggregate Reddit posts across multiple subreddits and perform sentiment analysis
+def get_aggregated_stock_posts(subreddits, stocks, limit_per_stock=15, save_to_csv=False):
+    """
+    Fetches and aggregates Reddit posts from multiple subreddits for specified stocks and analyzes sentiment.
 
-# List of subreddits to fetch posts from
-subreddits = ['Investing', 'Stocks', 'WallStreetBets', 'Options', 'GlobalMarkets']
+    Returns:
+        pd.DataFrame: A DataFrame containing aggregated data with sentiment analysis.
+    """
+    all_data = []
 
-# Initialize an empty list to hold all posts data
-all_data = []
+    for subreddit in subreddits:
+        print(f"Fetching posts from r/{subreddit}")
+        stock_posts = fetch_reddit_posts(subreddit, stocks, limit_per_stock)
+        
+        for stock in stocks:
+            for post in stock_posts[stock]:
+                sentiment = analyze_sentiment(post['title'])  # Perform sentiment analysis
+                all_data.append({
+                    'subreddit': subreddit,
+                    'stock': stock, 
+                    'post': post['title'], 
+                    'author': post['author'], 
+                    'created_time': post['created_time'], 
+                    'sentiment': sentiment
+                })
 
-# Fetch Reddit posts for each subreddit and aggregate them
-for subreddit in subreddits:
-    print(f"Fetching posts from r/{subreddit}")
-    stock_posts = fetch_reddit_posts(subreddit, stocks, 15)
+    # Create a DataFrame with the collected data
+    df = pd.DataFrame(all_data)
     
-    for stock in stocks:
-        for post in stock_posts[stock]:
-            sentiment = analyze_sentiment(post['title'])  # Perform sentiment analysis
-            all_data.append({
-                'subreddit': subreddit,
-                'stock': stock, 
-                'post': post['title'], 
-                'author': post['author'], 
-                'created_time': post['created_time'], 
-                'sentiment': sentiment
-            })
+    # Save DataFrame to CSV if required
+    #if save_to_csv:
+       # df.to_csv('reddit_stock_posts.csv', index=False)
+    
+    return df
 
-# Create a DataFrame with the collected data
-df = pd.DataFrame(all_data)
-
-# Display the DataFrame with subreddit, stock, post, author, time, and sentiment
-print(df[['subreddit', 'stock', 'post', 'author', 'created_time', 'sentiment']])
-
-# Saving the DataFrame to CSV for future reference
-df.to_csv('reddit_stock_posts.csv', index=False)
-
-# Testing: Check the shape of the dataframe to ensure data is collected
-assert df.shape[0] > 0, "No data was collected, check API responses."
+# Example usage
+if __name__ == "__main__":
+    
+    stocks = [
+        'tesla', 'apple', 'amazon', 'google', 'microsoft', 'facebook', 'nvidia', 'netflix',
+        'twitter', 'shopify', 'ibm', 'oracle', 'intel', 'amd', 'salesforce', 'paypal', 
+        'adobe', 'zoom', 'snap', 'spotify', 'uber', 'lyft', 'airbnb', 'square', 
+        'paypal', 'baidu', 'alibaba', 'tencent', 'microsoft', 'cisco', 'hp', 'dell', 
+        'twitter', 'roku', 'qualcomm', 'baba', 'lg', 't-mobile', 'morgan', 'wells'
+    ]
+    
+    subreddits = ['Investing', 'Stocks', 'WallStreetBets', 'Options', 'GlobalMarkets']
+    
+    
+    df = get_aggregated_stock_posts(subreddits, stocks, limit_per_stock=15, save_to_csv=True)
+    print(df[['subreddit', 'stock', 'post', 'author', 'created_time', 'sentiment']])
