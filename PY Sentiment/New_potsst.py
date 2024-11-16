@@ -1,119 +1,121 @@
-# utility.py
 import json
 import requests
-import pandas as pd
-from textblob import TextBlob
 from datetime import datetime
+import nltk
+from stock_app.models import Post, Stock
+from django.core.management.base import BaseCommand
 
-# Function to fetch Reddit posts for a list of stocks in a specific subreddit
-def fetch_reddit_posts(subreddit, stocks, limit_per_stock=15):
-    """
-    Fetches Reddit posts for specified stocks in a subreddit.
-    """
-    url = f"https://reddit.com/r/{subreddit}.json"
+nltk.download('vader_lexicon')
+from nltk.sentiment.vader import SentimentIntensityAnalyzer
+
+# Define stocks and subreddits
+STOCKS = [
+    'nvidia', 'tesla', 'apple', 'facebook', 'microsoft', 'amazon', 'amd',
+    'broadcom', 'palantir', 'microstrategy', 'exxon', 'micron', 'jpmorgan', 'google',
+    'salesforce', 'lilly', 'vistra', 'home depot', 'netflix', 'unitedhealth',
+    'bank of america', 'costco', 'super micro', 'chevron', 'visa', 'coinbase'
+]
+
+TICKERS = [
+    'NVDA', 'TSLA', 'AAPL', 'META', 'MSFT', 'AMZN', 'AMD',
+    'AVGO', 'PLTR', 'MSTR', 'XOM', 'MU', 'JPM', 'GOOG',
+    'CRM', 'LLY', 'VST', 'HD', 'NFLX', 'UNH', 'BAC',
+    'COST', 'SMCI', 'CVX', 'V', 'COIN'
+]
+
+SUBREDDITS = ['Investing', 'Stocks', 'WallStreetBets', 'Options', 'GlobalMarkets']
+
+# Function to fetch Reddit posts with no time limit
+def fetch_reddit_posts(subreddit, stocks, max_posts_per_stock=None):
     headers = {"User-Agent": "Mozilla/5.0"}
     stock_posts = {stock: [] for stock in stocks}
-    params = {'limit': 100}  
-
-    while any(len(posts) < limit_per_stock for posts in stock_posts.values()):
-        response = requests.get(url, headers=headers, params=params)
-        data = response.json()
-
-        if 'data' not in data or 'children' not in data['data']:
-            break
-
-        for post in data["data"]["children"]:
-            post_data = post["data"]
-            title = post_data["title"].lower()
-            author = post_data.get("author", "N/A")
-            created_utc = post_data.get("created_utc", None)
-
-            # Convert Unix timestamp to human-readable format
-            if created_utc:
-                created_time = datetime.utcfromtimestamp(created_utc).strftime('%Y-%m-%d %H:%M:%S')
-            else:
-                created_time = "N/A"
+    base_url = f"https://reddit.com/r/{subreddit}/search.json"
+    
+    for stock in stocks:
+        after = None
+        while max_posts_per_stock is None or len(stock_posts[stock]) < max_posts_per_stock:
+            params = {
+                'q': stock,  # Search for the stock keyword
+                'sort': 'new',  # Sort by the newest posts
+                'limit': 1000,  # Maximum allowed posts per request
+                'restrict_sr': True,  # Restrict to the subreddit
+                'after': after  # Pagination parameter
+            }
             
-            for stock in stocks:
-                if stock in title and len(stock_posts[stock]) < limit_per_stock:
-                    stock_posts[stock].append({
-                        'title': title,
-                        'author': author,
-                        'created_time': created_time
-                    })
-                    if all(len(posts) >= limit_per_stock for posts in stock_posts.values()):
-                        break
-
-        if 'data' in data and 'after' in data['data'] and data['data']['after']:
-            url = f"https://reddit.com/r/{subreddit}.json?after={data['data']['after']}"
-        else:
-            break
-
+            response = requests.get(base_url, headers=headers, params=params)
+            if response.status_code != 200:
+                print(f"Error {response.status_code} while fetching {stock} from {subreddit}")
+                break
+            
+            try:
+                data = response.json()
+            except ValueError as e:
+                print("Error parsing JSON:", e)
+                break
+            
+            if 'data' not in data or 'children' not in data['data']:
+                break
+            
+            posts = data['data']['children']
+            if not posts:  # Exit if no more posts
+                break
+            
+            for post in posts:
+                post_data = post['data']
+                title = post_data['title'].lower()
+                author = post_data.get('author', 'N/A')
+                created_utc = post_data.get('created_utc')
+                created_time = datetime.utcfromtimestamp(created_utc).strftime('%Y-%m-%d %H:%M:%S') if created_utc else "N/A"
+                
+                stock_posts[stock].append({
+                    'title': title,
+                    'author': author,
+                    'created_time': created_time
+                })
+                
+                # Break if the desired number of posts is reached
+                if max_posts_per_stock and len(stock_posts[stock]) >= max_posts_per_stock:
+                    break
+            
+            # Update `after` for pagination
+            after = data['data'].get('after')
+            if not after:
+                break
+    
     return stock_posts
 
 # Function to perform sentiment analysis on text
 def analyze_sentiment(text):
-    """
-    Analyzes the sentiment of a given text.
-    Returns:
-        str: 'positive', 'neutral', or 'negative' sentiment.
-    """
-    analysis = TextBlob(text)
-    if analysis.sentiment.polarity > 0:
-        return 'positive'
-    elif analysis.sentiment.polarity == 0:
-        return 'neutral'
-    else:
-        return 'negative'
+    sid = SentimentIntensityAnalyzer()
+    result = sid.polarity_scores(text)
+    return result['compound']
 
-# Main function to aggregate Reddit posts across multiple subreddits and perform sentiment analysis
-def get_aggregated_stock_posts(subreddits, stocks, limit_per_stock=15, save_to_csv=False):
-    """
-    Fetches and aggregates Reddit posts from multiple subreddits for specified stocks and analyzes sentiment.
-
-    Returns:
-        pd.DataFrame: A DataFrame containing aggregated data with sentiment analysis.
-    """
-    all_data = []
-
+# Main function to fetch posts, analyze sentiment, and save to database
+def get_aggregated_stock_posts(subreddits, stocks, max_posts_per_stock=None):
     for subreddit in subreddits:
         print(f"Fetching posts from r/{subreddit}")
-        stock_posts = fetch_reddit_posts(subreddit, stocks, limit_per_stock)
+        stock_posts = fetch_reddit_posts(subreddit, stocks, max_posts_per_stock)
         
-        for stock in stocks:
+        for i, stock in enumerate(stocks):
+            print(f"Processing stock: {TICKERS[i]}")
+            try:
+                stock_obj = Stock.objects.get(ticker=TICKERS[i])
+            except Stock.DoesNotExist:
+                print(f"Stock {TICKERS[i]} not found in the database.")
+                continue
+            
             for post in stock_posts[stock]:
-                sentiment = analyze_sentiment(post['title'])  # Perform sentiment analysis
-                all_data.append({
-                    'subreddit': subreddit,
-                    'stock': stock, 
-                    'post': post['title'], 
-                    'author': post['author'], 
-                    'created_time': post['created_time'], 
-                    'sentiment': sentiment
-                })
+                sentiment = analyze_sentiment(post['title'])
+                p = Post.objects.create(
+                    stock=stock_obj,
+                    author=post['author'],
+                    time=post['created_time'],
+                    sentiment=sentiment,
+                    text=post['title'],
+                )
+                p.save()
 
-    # Create a DataFrame with the collected data
-    df = pd.DataFrame(all_data)
-    
-    # Save DataFrame to CSV if required
-    #if save_to_csv:
-       # df.to_csv('reddit_stock_posts.csv', index=False)
-    
-    return df
-
-# Example usage
-if __name__ == "__main__":
-    
-    stocks = [
-        'tesla', 'apple', 'amazon', 'google', 'microsoft', 'facebook', 'nvidia', 'netflix',
-        'twitter', 'shopify', 'ibm', 'oracle', 'intel', 'amd', 'salesforce', 'paypal', 
-        'adobe', 'zoom', 'snap', 'spotify', 'uber', 'lyft', 'airbnb', 'square', 
-        'paypal', 'baidu', 'alibaba', 'tencent', 'microsoft', 'cisco', 'hp', 'dell', 
-        'twitter', 'roku', 'qualcomm', 'baba', 'lg', 't-mobile', 'morgan', 'wells'
-    ]
-    
-    subreddits = ['Investing', 'Stocks', 'WallStreetBets', 'Options', 'GlobalMarkets']
-    
-    
-    df = get_aggregated_stock_posts(subreddits, stocks, limit_per_stock=15, save_to_csv=True)
-    print(df[['subreddit', 'stock', 'post', 'author', 'created_time', 'sentiment']])
+# Django command to execute the script
+class Command(BaseCommand):
+    def handle(self, *args, **kwargs):
+        get_aggregated_stock_posts(SUBREDDITS, STOCKS, max_posts_per_stock=1000)
