@@ -1,0 +1,116 @@
+import json
+import requests
+from datetime import datetime
+import nltk
+from stock_app.models import Post, Stock
+from django.core.management.base import BaseCommand
+
+nltk.download('vader_lexicon')
+from nltk.sentiment.vader import SentimentIntensityAnalyzer
+
+# Define subreddits
+SUBREDDITS = ['Investing', 'Stocks', 'WallStreetBets', 'Options', 'GlobalMarkets']
+
+# Function to fetch Reddit posts for a specific stock
+def fetch_reddit_posts(subreddit, stock, max_posts=None):
+    headers = {"User-Agent": "Mozilla/5.0"}
+    stock_posts = []
+    base_url = f"https://reddit.com/r/{subreddit}/search.json"
+    after = None
+
+    while max_posts is None or len(stock_posts) < max_posts:
+        params = {
+            'q': stock,  # Search for the stock keyword
+            'sort': 'new',  # Sort by the newest posts
+            'limit': 100,  # Maximum posts per request
+            'restrict_sr': True,  # Restrict to the subreddit
+            'after': after  # Pagination parameter
+        }
+        
+        response = requests.get(base_url, headers=headers, params=params)
+        if response.status_code != 200:
+            print(f"Error {response.status_code} while fetching posts for {stock} from {subreddit}")
+            break
+        
+        try:
+            data = response.json()
+        except ValueError as e:
+            print("Error parsing JSON:", e)
+            break
+        
+        if 'data' not in data or 'children' not in data['data']:
+            break
+        
+        posts = data['data']['children']
+        if not posts:  # Exit if no more posts
+            break
+        
+        for post in posts:
+            post_data = post['data']
+            title = post_data['title'].lower()
+            author = post_data.get('author', 'N/A')
+            created_utc = post_data.get('created_utc')
+            created_time = datetime.utcfromtimestamp(created_utc).strftime('%Y-%m-%d %H:%M:%S') if created_utc else "N/A"
+            
+            stock_posts.append({
+                'title': title,
+                'author': author,
+                'created_time': created_time
+            })
+            
+            # Break if the desired number of posts is reached
+            if max_posts and len(stock_posts) >= max_posts:
+                break
+        
+        # Update `after` for pagination
+        after = data['data'].get('after')
+        if not after:
+            break
+    
+    return stock_posts
+
+# Function to perform sentiment analysis on text
+def analyze_sentiment(text):
+    sid = SentimentIntensityAnalyzer()
+    result = sid.polarity_scores(text)
+    return result['compound']
+
+# Main function to fetch posts for a specific stock
+def get_posts_for_stock(subreddits, stock_name, ticker, max_posts=None):
+    for subreddit in subreddits:
+        print(f"Fetching posts from r/{subreddit} for stock: {stock_name}")
+        stock_posts = fetch_reddit_posts(subreddit, stock_name, max_posts)
+        
+        try:
+            stock_obj = Stock.objects.get(ticker=ticker)
+        except Stock.DoesNotExist:
+            print(f"Stock {ticker} not found in the database.")
+            return
+        
+        for post in stock_posts:
+            sentiment = analyze_sentiment(post['title'])
+            p = Post.objects.create(
+                stock=stock_obj,
+                author=post['author'],
+                time=post['created_time'],
+                sentiment=sentiment,
+                text=post['title'],
+            )
+            p.save()
+
+# Django command to execute the script
+class Command(BaseCommand):
+    help = "Fetch and analyze Reddit posts for a specific stock."
+
+    def add_arguments(self, parser):
+        parser.add_argument('stock_name', type=str, help="The name of the stock to search for.")
+        parser.add_argument('ticker', type=str, help="The ticker symbol of the stock.")
+        parser.add_argument('--max_posts', type=int, default=100, help="The maximum number of posts to fetch.")
+
+    def handle(self, *args, **kwargs):
+        stock_name = kwargs['stock_name']
+        ticker = kwargs['ticker']
+        max_posts = kwargs['max_posts']
+
+        get_posts_for_stock(SUBREDDITS, stock_name, ticker, max_posts)
+#run it using py manag.py particular_stock "amd" "AMD" --max_posts 200
